@@ -256,9 +256,28 @@
           };
 
           const downloadPDF = () => {
-            const element = document.getElementById('print-area');
-            window.html2pdf().from(element).set({ margin: 5, filename: 'Kupon.pdf', image: {type: 'jpeg', quality: 0.98}, html2canvas: {scale: 2}, jsPDF: {unit: 'mm', format: 'a4', orientation: 'portrait'} }).save();
-          };
+    const element = document.getElementById('print-area');
+    const opt = {
+        margin: 5,
+        filename: `Kupon_Qurban_At-Taqwa.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { 
+            scale: 2, 
+            useCORS: true, // PENTING: Mengizinkan gambar dari server luar
+            logging: false,
+            letterRendering: true
+        },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+
+    // Memberikan jeda 1 detik agar QR Code benar-benar siap
+    setScanMessage({ type: 'success', text: "Menyiapkan PDF, mohon tunggu..." });
+    setTimeout(() => {
+        window.html2pdf().from(element).set(opt).save().then(() => {
+            setScanMessage({ type: '', text: "" });
+        });
+    }, 1500);
+};
 
           const stats = { total: recipients.length, taken: recipients.filter(r => r.status === 'taken').length, pending: recipients.filter(r => r.status === 'pending').length };
 
@@ -364,7 +383,12 @@
                               {customLogo && <div className="absolute inset-0 flex items-center justify-end p-1.5 opacity-20"><img src={customLogo} className="h-[85%] object-contain object-right" /></div>}
                               <div className="text-center border-b-[0.5px] border-black mb-1 pb-0.5 relative z-10"><p className="text-[6.5px] font-black uppercase tracking-tighter">panitia qurban 1447 H</p><p className="text-[7.5px] font-black uppercase">Masjid At-Taqwa</p></div>
                               <div className="flex-1 flex gap-1.5 relative z-10">
-                                <div className="w-[45%] border-r-[0.5px] border-black border-dashed pr-1 flex items-center justify-center"><div className="w-full aspect-square border border-black p-0.5 bg-white"><img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${r.id}`} className="w-full h-full" /></div></div>
+                                <div className="w-[45%] border-r-[0.5px] border-black border-dashed pr-1 flex items-center justify-center"><div className="w-full aspect-square border border-black p-0.5 bg-white"><img 
+    src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${r.id}`} 
+    alt="QR" 
+    className="w-full h-full" 
+    crossOrigin="anonymous" 
+/>
                                 <div className="w-[55%] flex flex-col py-0.5">
                                   <div className="text-[8px] font-black mb-1 uppercase">NO. {r.no || '-'}</div>
                                   <div className="flex-1 flex items-center"><h3 className={`font-black uppercase leading-[0.9] line-clamp-3 ${r.name.length > 25 ? 'text-[11px]' : 'text-[14px]'}`}>{r.name}</h3></div>
