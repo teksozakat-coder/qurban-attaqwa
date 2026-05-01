@@ -50,7 +50,7 @@
         const auth = firebase.auth();
         const db = firebase.firestore();
         const appId = 'qurban-manager-1447h';
-        const ADMIN_PIN = "1234"; // SILAKAN GANTI PIN DISINI
+        const ADMIN_PIN = "1234";
 
         const playSound = (type) => {
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -71,7 +71,7 @@
         );
 
         const App = () => {
-          const [role, setRole] = useState(localStorage.getItem('user-role') || null); // null, 'admin', 'user'
+          const [role, setRole] = useState(localStorage.getItem('user-role') || null);
           const [user, setUser] = useState(null);
           const [recipients, setRecipients] = useState([]);
           const [loading, setLoading] = useState(true);
@@ -82,6 +82,8 @@
           const [editingId, setEditingId] = useState(null);
           const [editName, setEditName] = useState('');
           const [editRT, setEditRT] = useState('');
+          const [newName, setNewName] = useState('');
+          const [newRT, setNewRT] = useState('');
 
           const [importModal, setImportModal] = useState(false);
           const [importData, setImportData] = useState([]);
@@ -143,9 +145,7 @@
                       setRole('admin');
                       localStorage.setItem('user-role', 'admin');
                       setView('dashboard');
-                  } else {
-                      alert("PIN Salah!");
-                  }
+                  } else { alert("PIN Salah!"); }
               } else {
                   setRole('user');
                   localStorage.setItem('user-role', 'user');
@@ -154,8 +154,7 @@
           };
 
           const handleLogout = () => {
-              setRole(null);
-              localStorage.removeItem('user-role');
+              if(window.confirm('Keluar dari mode ini?')) { setRole(null); localStorage.removeItem('user-role'); }
           };
 
           const processedRecipients = useMemo(() => {
@@ -178,36 +177,13 @@
               return chunks;
           }, [recipients]);
 
-          const exportToExcel = () => {
-              const dataToExport = [...recipients].sort((a, b) => (a.no || 0) - (b.no || 0)).map(r => ({ "No. Urut": r.no || '-', "Nama": r.name, "RT": r.rt, "Status": r.status === 'taken' ? 'SUDAH DIAMBIL' : 'BELUM DIAMBIL' }));
-              const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-              const workbook = XLSX.utils.book_new();
-              XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan Qurban");
-              XLSX.writeFile(workbook, `Laporan_Qurban_At-Taqwa.xlsx`);
-          };
-
-          const handleSelectAll = (e) => { e.target.checked ? setSelectedIds(processedRecipients.map(r => r.id)) : setSelectedIds([]); };
-          const toggleSelect = (id) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]); };
-
-          const bulkMarkAsTaken = async () => {
-              if (!window.confirm(`Tandai ${selectedIds.length} warga?`)) return;
-              const batch = db.batch();
-              selectedIds.forEach(id => { const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('recipients').doc(id); batch.update(docRef, { status: 'taken', takenAt: Date.now() }); });
-              await batch.commit(); setSelectedIds([]);
-          };
-
-          const bulkDelete = async () => {
-              if (!window.confirm(`HAPUS ${selectedIds.length} data?`)) return;
-              const batch = db.batch();
-              selectedIds.forEach(id => { const docRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('recipients').doc(id); batch.delete(docRef); });
-              await batch.commit(); setSelectedIds([]);
-          };
-
           const addRecipient = async (e) => {
             e.preventDefault();
             if (!newName.trim()) return;
             const currentMaxNo = recipientsRef.current.reduce((max, r) => Math.max(max, r.no || 0), 0);
-            await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('recipients').add({ name: newName, rt: r.rt || '-', status: 'pending', timestamp: Date.now(), updatedBy: user.uid, no: currentMaxNo + 1 });
+            await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('recipients').add({ 
+                name: newName, rt: newRT || '-', status: 'pending', timestamp: Date.now(), updatedBy: user.uid, no: currentMaxNo + 1 
+            });
             setNewName(''); setNewRT('');
           };
 
@@ -217,22 +193,58 @@
               setEditingId(null);
           };
 
+          const deleteRecipient = async (id) => { if(window.confirm('Hapus warga ini?')) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('recipients').doc(id).delete(); };
+
+          const toggleStatus = async (id, currentStatus) => {
+            const newStatus = currentStatus === 'taken' ? 'pending' : 'taken';
+            await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('recipients').doc(id).update({ status: newStatus, takenAt: newStatus === 'taken' ? Date.now() : null });
+          };
+
+          const processImport = async () => {
+            setIsImporting(true);
+            const colRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('recipients');
+            const sortedImport = [...importData].sort((a, b) => String(a.rt).localeCompare(String(b.rt), undefined, {numeric: true}));
+            let currentMaxNo = recipientsRef.current.reduce((max, r) => Math.max(max, r.no || 0), 0);
+            const chunks = [];
+            for (let i = 0; i < sortedImport.length; i += 400) chunks.push(sortedImport.slice(i, i + 400));
+            try {
+              for (const chunk of chunks) {
+                const batch = db.batch();
+                chunk.forEach(item => { currentMaxNo++; const newDocRef = colRef.doc(); batch.set(newDocRef, { ...item, status: 'pending', timestamp: Date.now(), updatedBy: user.uid, no: currentMaxNo }); });
+                await batch.commit();
+              }
+              setImportModal(false);
+            } catch (error) {} finally { setIsImporting(false); }
+          };
+
+          const exportToExcel = () => {
+              const dataToExport = [...recipients].sort((a, b) => (a.no || 0) - (b.no || 0)).map(r => ({ "No. Urut": r.no || '-', "Nama": r.name, "RT": r.rt, "Status": r.status === 'taken' ? 'SUDAH DIAMBIL' : 'BELUM DIAMBIL' }));
+              const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+              const workbook = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan Qurban");
+              XLSX.writeFile(workbook, `Laporan_Qurban_At-Taqwa.xlsx`);
+          };
+
+          const downloadPDF = () => {
+            const element = document.getElementById('print-area');
+            const opt = { margin: 5, filename: 'Kupon_At-Taqwa.pdf', image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } };
+            setScanMessage({ type: 'success', text: "Menyiapkan PDF..." });
+            setTimeout(() => { window.html2pdf().from(element).set(opt).save().then(() => setScanMessage({ type: '', text: "" })); }, 1500);
+          };
+
+          const handleSelectAll = (e) => { e.target.checked ? setSelectedIds(processedRecipients.map(r => r.id)) : setSelectedIds([]); };
+          const toggleSelect = (id) => { setSelectedIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]); };
+
           const stats = { total: recipients.length, taken: recipients.filter(r => r.status === 'taken').length, pending: recipients.filter(r => r.status === 'pending').length };
 
           if (!role) return (
               <div className="h-screen flex items-center justify-center bg-emerald-950 p-6">
                 <div className="w-full max-w-md text-center space-y-8">
-                    <div className="flex flex-col items-center gap-4">
-                        <Icon name="qr-code" size={80} className="text-emerald-400" />
-                        <h1 className="text-4xl font-black text-white italic">AT-TAQWA QURBAN</h1>
-                    </div>
+                    <Icon name="qr-code" size={80} className="text-emerald-400 mx-auto" />
+                    <h1 className="text-4xl font-black text-white italic">AT-TAQWA QURBAN</h1>
                     <div className="grid grid-cols-1 gap-4">
-                        <button onClick={() => handleLogin('user')} className="bg-emerald-500 hover:bg-emerald-400 text-emerald-950 p-6 rounded-[30px] font-black text-xl shadow-2xl flex items-center justify-center gap-3">
-                            <Icon name="user" size={28}/> MODE PETUGAS
-                        </button>
-                        <button onClick={() => handleLogin('admin')} className="bg-white/10 hover:bg-white/20 text-white p-6 rounded-[30px] font-black text-xl border border-white/20 flex items-center justify-center gap-3">
-                            <Icon name="shield-check" size={28}/> MODE ADMIN
-                        </button>
+                        <button onClick={() => handleLogin('user')} className="bg-emerald-500 text-emerald-950 p-6 rounded-[30px] font-black text-xl shadow-2xl flex items-center justify-center gap-3"><Icon name="user" size={28}/> PETUGAS</button>
+                        <button onClick={() => handleLogin('admin')} className="bg-white/10 text-white p-6 rounded-[30px] font-black text-xl border border-white/20 flex items-center justify-center gap-3"><Icon name="shield-check" size={28}/> ADMIN</button>
                     </div>
                 </div>
               </div>
@@ -244,16 +256,14 @@
             <div className="min-h-screen">
               <header className="bg-emerald-900 text-white p-6 shadow-md no-print sticky top-0 z-20">
                 <div className="max-w-5xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
-                  <div className="flex items-center gap-4 text-center sm:text-left">
+                  <div className="flex items-center gap-4 text-center sm:text-left cursor-pointer" onClick={handleLogout}>
                     <Icon name="qr-code" className="text-emerald-400" size={40} />
-                    <div className="cursor-pointer" onClick={handleLogout}>
+                    <div>
                         <h1 className="text-huge font-black leading-none uppercase tracking-tighter">AT-TAQWA QURBAN</h1>
                         <p className="text-[10px] sm:text-xs opacity-70 font-bold uppercase tracking-[0.2em] mt-1">{role === 'admin' ? '🛡️ ADMIN MODE' : '👥 PETUGAS MODE'}</p>
                     </div>
                   </div>
-                  <button onClick={() => setView('scan')} className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 px-8 py-3 rounded-full shadow-lg active:scale-95 flex items-center justify-center gap-2 transition-all">
-                    <Icon name="scan" size={24} /> <span className="font-black uppercase tracking-wider">SCAN KUPON</span>
-                  </button>
+                  <button onClick={() => setView('scan')} className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-400 px-8 py-3 rounded-full shadow-lg active:scale-95 flex items-center justify-center gap-2 transition-all"><Icon name="scan" size={24} /> <span className="font-black uppercase tracking-wider">SCAN KUPON</span></button>
                 </div>
               </header>
 
@@ -264,24 +274,44 @@
                   {role === 'admin' && <button onClick={() => setView('print')} className={`flex-1 py-4 flex flex-col items-center gap-1 transition-all ${view === 'print' ? 'bg-emerald-50 text-emerald-800 border-b-4 border-emerald-800' : 'text-slate-400'}`}><Icon name="printer" size={20} /><span className="text-[10px] font-black uppercase">Cetak</span></button>}
                 </nav>
 
-                {/* STATS SELALU MUNCUL DI ATAS LIST UNTUK USER */}
-                {view === 'list' && (
-                    <div className="grid grid-cols-3 gap-2 mb-6 no-print">
-                        <div className="bg-white p-3 rounded-2xl border text-center"><p className="text-[10px] font-black text-slate-400 uppercase">Total</p><p className="text-xl font-black">{stats.total}</p></div>
-                        <div className="bg-emerald-600 p-3 rounded-2xl text-white text-center shadow-lg"><p className="text-[10px] font-black text-emerald-200 uppercase">Sudah</p><p className="text-xl font-black">{stats.taken}</p></div>
-                        <div className="bg-white p-3 rounded-2xl border text-center text-red-500"><p className="text-[10px] font-black uppercase">Sisa</p><p className="text-xl font-black">{stats.pending}</p></div>
-                    </div>
-                )}
+                <div className="grid grid-cols-3 gap-2 mb-6 no-print">
+                    <div className="bg-white p-3 rounded-2xl border text-center"><p className="text-[10px] font-black text-slate-400 uppercase">Total</p><p className="text-xl font-black">{stats.total}</p></div>
+                    <div className="bg-emerald-600 p-3 rounded-2xl text-white text-center shadow-lg"><p className="text-[10px] font-black text-emerald-200 uppercase">Sudah</p><p className="text-xl font-black">{stats.taken}</p></div>
+                    <div className="bg-white p-3 rounded-2xl border text-center text-red-500"><p className="text-[10px] font-black uppercase">Sisa</p><p className="text-xl font-black">{stats.pending}</p></div>
+                </div>
 
                 {view === 'dashboard' && role === 'admin' && (
                   <div className="space-y-6 no-print">
-                    {/* UI DASHBOARD ADMIN (IMPORT, DLL) TETAP SAMA */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="bg-white p-8 rounded-3xl border border-slate-200">
                             <h2 className="font-black mb-6 uppercase flex items-center gap-2 text-xl"><Icon name="plus" size={24} /> Tambah Warga</h2>
-                            {/* Form Tambah Warga... */}
+                            <form onSubmit={addRecipient} className="space-y-3">
+                                <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Nama Lengkap" value={newName} onChange={e => setNewName(e.target.value)} required />
+                                <input className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold outline-none focus:ring-2 focus:ring-emerald-500" placeholder="RT" value={newRT} onChange={e => setNewRT(e.target.value)} />
+                                <button type="submit" className="w-full bg-emerald-700 text-white font-black rounded-2xl py-4 uppercase">Simpan Warga</button>
+                            </form>
                         </div>
-                        {/* Impor Excel... */}
+                        <div className="flex flex-col gap-4">
+                            <div className="bg-slate-900 text-white p-8 rounded-[40px] relative overflow-hidden flex-1">
+                                <h3 className="text-xl font-black mb-1 italic uppercase">Impor Excel</h3>
+                                <label className="cursor-pointer bg-white text-slate-900 px-6 py-3 rounded-2xl font-black text-xs inline-flex items-center gap-2 mt-4">
+                                    <Icon name="file-up" size={16}/> PILIH FILE
+                                    <input type="file" className="hidden" accept=".xlsx" onChange={async (e) => {
+                                        const reader = new FileReader();
+                                        reader.onload = (evt) => {
+                                            const wb = window.XLSX.read(evt.target.result, { type: 'binary' });
+                                            const data = window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+                                            setImportData(data.map(row => ({ name: String(row.Nama || row.nama || '---'), rt: String(row.RT || row.rt || '-') })));
+                                            setImportModal(true);
+                                        };
+                                        reader.readAsBinaryString(e.target.files[0]);
+                                    }} />
+                                </label>
+                            </div>
+                            <button onClick={exportToExcel} className="bg-emerald-100 border-2 border-emerald-200 text-emerald-800 p-8 rounded-[40px] flex items-center justify-between shadow-sm">
+                                <div><h3 className="text-xl font-black uppercase italic leading-none">Export</h3><p className="text-emerald-600 text-[10px] font-bold mt-1 uppercase">Download Laporan</p></div><Icon name="download" size={32} />
+                            </button>
+                        </div>
                     </div>
                   </div>
                 )}
@@ -290,43 +320,27 @@
                   <div className="space-y-4 no-print">
                     <div className="flex flex-col sm:flex-row gap-3">
                       <div className="flex-1 relative"><Icon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input type="text" placeholder="Cari Nama / RT..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full bg-white border border-slate-200 rounded-2xl pl-12 pr-4 py-4 font-bold shadow-sm outline-none focus:ring-2 focus:ring-emerald-500" /></div>
-                      <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="bg-white border border-slate-200 rounded-2xl px-4 py-4 font-bold text-sm outline-none">
-                          <option value="no">No. Urut</option>
-                          <option value="name">Abjad A-Z</option>
-                          <option value="rt">Urutan RT</option>
-                          <option value="taken_first">Terambil (Atas)</option>
-                          <option value="status">Belum (Atas)</option>
-                      </select>
+                      <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="bg-white border border-slate-200 rounded-2xl px-4 py-4 font-bold text-sm outline-none"><option value="no">No. Urut</option><option value="name">Abjad A-Z</option><option value="rt">Urutan RT</option><option value="taken_first">Terambil (Atas)</option><option value="status">Belum (Atas)</option></select>
                     </div>
-                    
-                    {role === 'admin' && selectedIds.length > 0 && <div className="flex items-center gap-3 p-4 bg-emerald-100 rounded-2xl border border-emerald-200 shadow-sm animate-pulse"><span className="font-black text-emerald-800 flex-1">{selectedIds.length} Dipilih</span><button onClick={bulkMarkAsTaken} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase">AMBIL</button><button onClick={bulkDelete} className="bg-red-600 text-white px-4 py-2 rounded-xl font-black text-xs uppercase">HAPUS</button></div>}
-
                     <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden divide-y divide-slate-100 shadow-sm">
-                      {role === 'admin' && <div className="p-3 bg-slate-50 flex items-center gap-4 font-black text-[10px] uppercase text-slate-400"><input type="checkbox" onChange={handleSelectAll} checked={selectedIds.length === processedRecipients.length && recipients.length > 0} className="w-5 h-5 accent-emerald-600" /> Pilih Semua</div>}
-                      
                       {processedRecipients.map((r) => (
                         <div key={r.id} className={`p-4 flex items-center justify-between border-l-[6px] ${r.status === 'taken' ? 'bg-red-50/50 border-red-500' : 'bg-white border-transparent'}`}>
                           {editingId === r.id && role === 'admin' ? (
-                            <div className="flex-1 flex items-center gap-3"><input className="flex-1 bg-slate-50 border rounded-xl px-4 py-2 font-black uppercase text-sm outline-none focus:ring-2 focus:ring-emerald-500" value={editName} onChange={e => setEditName(e.target.value)} /><button onClick={() => saveEdit(r.id)} className="p-2 bg-emerald-600 text-white rounded-xl shadow-lg"><Icon name="save" size={20}/></button></div>
+                            <div className="flex-1 flex items-center gap-3"><input className="flex-1 bg-slate-50 border rounded-xl px-4 py-2 font-black uppercase text-sm outline-none focus:ring-2 focus:ring-emerald-500" value={editName} onChange={e => setEditName(e.target.value)} /><button onClick={() => saveEdit(r.id)} className="p-2 bg-emerald-600 text-white rounded-xl shadow-lg"><Icon name="save" size={20}/></button><button onClick={() => setEditingId(null)} className="p-2 bg-slate-200 text-slate-500 rounded-xl"><Icon name="x" size={20}/></button></div>
                           ) : (
                             <>
                               <div className="flex items-center gap-4 overflow-hidden">
-                                {role === 'admin' && <input type="checkbox" checked={selectedIds.includes(r.id)} onChange={() => toggleSelect(r.id)} className="w-5 h-5 accent-emerald-600 flex-shrink-0" />}
                                 <span className="text-[10px] font-black text-slate-300 w-6 flex-shrink-0">{r.no ? r.no.toString().padStart(3,'0') : '---'}</span>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <p className={`text-base font-black uppercase leading-none ${r.status === 'taken' ? 'text-red-700 line-through opacity-70' : 'text-slate-800'}`}>{r.name}</p>
-                                    <span className={`text-xs font-black px-2 py-0.5 rounded-md border ${r.status === 'taken' ? 'border-red-300 bg-red-100 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>RT {r.rt}</span>
-                                </div>
+                                <div className="flex flex-wrap items-center gap-2"><p className={`text-base font-black uppercase leading-none ${r.status === 'taken' ? 'text-red-700 line-through opacity-70' : 'text-slate-800'}`}>{r.name}</p><span className={`text-xs font-black px-2 py-0.5 rounded-md border ${r.status === 'taken' ? 'border-red-300 bg-red-100 text-red-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>RT {r.rt}</span></div>
                               </div>
                               <div className="flex gap-1">
                                 {role === 'admin' ? (
                                     <>
                                         <button onClick={() => toggleStatus(r.id, r.status)} className={`p-2.5 rounded-xl ${r.status === 'taken' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-400'}`}><Icon name="check-circle" size={20}/></button>
-                                        <button onClick={() => startEditing(r)} className="p-2.5 text-slate-400 hover:text-emerald-600"><Icon name="pencil" size={18}/></button>
+                                        <button onClick={() => { setEditingId(r.id); setEditName(r.name); setEditRT(r.rt); }} className="p-2.5 text-slate-400 hover:text-emerald-600"><Icon name="pencil" size={18}/></button>
                                         <button onClick={() => deleteRecipient(r.id)} className="p-2.5 text-slate-300 hover:text-red-500"><Icon name="trash-2" size={18}/></button>
                                     </>
                                 ) : (
-                                    /* Tampilan untuk User: Hanya Badge Status tanpa tombol klik */
                                     r.status === 'taken' ? <span className="text-[10px] font-black text-red-600 uppercase bg-red-100 px-3 py-1.5 rounded-full">TERAMBIL</span> : <span className="text-[10px] font-black text-emerald-600 uppercase bg-emerald-100 px-3 py-1.5 rounded-full italic animate-pulse">SIAP</span>
                                 )}
                               </div>
@@ -338,16 +352,42 @@
                   </div>
                 )}
 
-                {/* Bagian Cetak & Scan Tetap Sama (Proteksi Role diterapkan di Tab Nav) */}
                 {view === 'print' && role === 'admin' && (
-                    <div id="print-area">
-                        {/* Layout Print... */}
+                  <div className="space-y-6">
+                    <div className="bg-slate-900 text-white p-8 rounded-[40px] no-print flex flex-col md:flex-row gap-6 items-center shadow-lg">
+                        <div className="flex-1 text-center md:text-left"><h2 className="text-2xl font-black uppercase italic">Cetak Kupon</h2><p className="text-slate-400 text-xs">Format A4 Portrait (28 Kupon)</p></div>
+                        <div className="flex gap-2 w-full md:w-auto">
+                            <label className="flex-1 cursor-pointer bg-white/10 text-white px-4 py-4 rounded-2xl font-black text-xs text-center border border-white/20 whitespace-nowrap"><Icon name="image" size={16} className="mr-1"/> LOGO BG<input type="file" accept="image/*" className="hidden" onChange={(e) => { if(e.target.files[0]){ const r = new FileReader(); r.onload=(ev)=>setCustomLogo(ev.target.result); r.readAsDataURL(e.target.files[0]); }}}/></label>
+                            <button onClick={downloadPDF} className="flex-1 bg-white text-slate-900 px-6 py-4 rounded-2xl font-black text-xs uppercase shadow-xl">PDF</button>
+                            <button onClick={() => window.print()} className="flex-1 bg-emerald-500 text-white px-6 py-4 rounded-2xl font-black text-xs uppercase shadow-xl">Print</button>
+                        </div>
                     </div>
+                    <div id="print-area">
+                      {chunkedPrintData.map((page, pIdx) => (
+                        <div key={pIdx} className="w-full grid grid-cols-4 border-r border-b border-black bg-white break-after-page" style={{ height: '280mm', gridTemplateRows: 'repeat(7, 1fr)' }}>
+                          {page.map((r) => (
+                            <div key={r.id} className="relative border-t border-l border-black p-1 flex flex-col overflow-hidden box-border h-full">
+                              {customLogo && <div className="absolute inset-0 flex items-center justify-end p-1.5 opacity-20"><img src={customLogo} className="h-[85%] object-contain object-right" crossOrigin="anonymous" /></div>}
+                              <div className="text-center border-b-[0.5px] border-black mb-1 pb-0.5 relative z-10"><p className="text-[6.5px] font-black uppercase tracking-tighter">panitia qurban 1447 H</p><p className="text-[7.5px] font-black uppercase">Masjid At-Taqwa</p></div>
+                              <div className="flex-1 flex gap-1.5 relative z-10">
+                                <div className="w-[45%] border-r-[0.5px] border-black border-dashed pr-1 flex items-center justify-center"><div className="w-full aspect-square border border-black p-0.5 bg-white"><img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${r.id}`} className="w-full h-full" crossOrigin="anonymous" /></div></div>
+                                <div className="w-[55%] flex flex-col py-0.5">
+                                  <div className="text-[8px] font-black mb-1 uppercase">NO. {r.no || '-'}</div>
+                                  <div className="flex-1 flex items-center overflow-hidden"><h3 className={`font-black uppercase leading-[0.9] line-clamp-3 text-slate-900 ${r.name.length > 25 ? 'text-[11px]' : 'text-[14px]'}`}>{r.name}</h3></div>
+                                  <div className="mt-auto flex justify-start"><span className="text-[9px] font-black border-[1.5px] border-black px-1.5 bg-white uppercase">RT {r.rt}</span></div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
 
                 {view === 'scan' && (
                   <div className="fixed inset-0 bg-slate-950 z-[100] flex flex-col">
-                    <div className="p-4 flex justify-between bg-slate-900 text-white border-b border-white/10"><h2 className="font-black uppercase text-emerald-400 text-sm tracking-widest">Scanner Petugas</h2><button onClick={() => setView('list')} className="p-2 bg-white/10 rounded-full"><Icon name="x"/></button></div>
+                    <div className="p-4 flex justify-between bg-slate-900 text-white border-b border-white/10"><h2 className="font-black uppercase text-emerald-400 text-sm tracking-widest">Scanner {role.toUpperCase()}</h2><button onClick={() => setView('list')} className="p-2 bg-white/10 rounded-full"><Icon name="x"/></button></div>
                     <div className="flex-1 flex flex-col items-center justify-center p-4 bg-black relative">
                       {scanMessage.text && <div className={`absolute top-10 px-8 py-4 rounded-full font-black text-sm uppercase animate-bounce border-2 shadow-2xl z-[200] ${scanMessage.type === 'success' ? 'bg-emerald-500 border-emerald-300 text-white' : 'bg-red-600 border-red-300 text-white'}`}>{scanMessage.text}</div>}
                       <div className="w-full max-w-sm bg-white rounded-3xl overflow-hidden shadow-[0_0_50px_rgba(16,185,129,0.3)] border-4 border-emerald-500/20"><div id="reader" className="w-full"></div></div>
@@ -355,6 +395,16 @@
                   </div>
                 )}
               </main>
+
+              {importModal && (
+                <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[300] flex items-center justify-center p-4">
+                  <div className="bg-white w-full max-w-md rounded-[50px] p-10 text-center shadow-2xl">
+                    <h2 className="text-3xl font-black mb-2 uppercase italic">Konfirmasi</h2>
+                    <p className="text-slate-500 text-sm mb-8 font-medium">Import {importData.length} warga?</p>
+                    <div className="flex flex-col gap-3"><button onClick={processImport} className="w-full py-5 bg-emerald-700 text-white font-black rounded-3xl uppercase">{isImporting ? 'PROSES...' : 'YA, IMPORT'}</button><button onClick={() => setImportModal(false)} className="w-full py-3 font-black text-slate-400 uppercase">Batal</button></div>
+                  </div>
+                </div>
+              )}
             </div>
           );
         };
